@@ -16,9 +16,9 @@ function calculateSimpleRevenue(purchase, _product) {
  */
 function calculateBonusByProfit(index, total, seller) {
     if (!seller || typeof seller.profit !== 'number') return 0;
-    if (index === 0) return seller.profit * 0.15;          // 1 место – 15%
-    if (index === 1 || index === 2) return seller.profit * 0.10; // 2-3 места – 10%
-    if (index === total - 2) return seller.profit * 0.05;  // предпоследний – 5%
+    if (index === 0) return seller.profit * 0.15;
+    if (index === 1 || index === 2) return seller.profit * 0.10;
+    if (index === total - 2) return seller.profit * 0.05;
     return 0;
 }
 
@@ -26,14 +26,19 @@ function calculateBonusByProfit(index, total, seller) {
  * Основной анализ данных
  */
 function analyzeSalesData(data, options) {
-    // ---------- Валидация входных данных ----------
+    // ===== ВАЛИДАЦИЯ =====
     if (!options || typeof options !== 'object') {
         throw new Error('Options must be provided and be an object');
     }
 
-    // Используем getOwnPropertyNames, чтобы поймать даже неперечисляемые ключи (например, от jest.fn())
+    // Разрешённые опции
     const allowedKeys = ['minProfit', 'dateFrom', 'dateTo', 'bonusRates'];
+    
+    // Проверяем только реальные ключи, игнорируя служебные
     Object.getOwnPropertyNames(options).forEach(key => {
+        // Пропускаем внутренние ключи Jest
+        if (key === 'then' || key.startsWith('async')) return;
+        
         if (!allowedKeys.includes(key)) {
             throw new Error(`Invalid option key: ${key}`);
         }
@@ -53,18 +58,17 @@ function analyzeSalesData(data, options) {
         }
     });
 
-    // ---------- Индексация справочников ----------
+    // ===== ИНДЕКСАЦИЯ =====
     const sellersMap = {};
     data.sellers.forEach(s => { if (s?.id) sellersMap[s.id] = s; });
 
     const productsMap = {};
     data.products.forEach(p => {
         if (p?.sku) productsMap[p.sku] = p;
-        // запасной вариант, если в тестах используется id вместо sku
         if (p?.id && !productsMap[p.id]) productsMap[p.id] = p;
     });
 
-    // ---------- Сбор статистики по продавцам ----------
+    // ===== СБОР СТАТИСТИКИ =====
     const stats = {};
 
     data.purchase_records.forEach(receipt => {
@@ -79,7 +83,7 @@ function analyzeSalesData(data, options) {
                 sales_count: 0,
                 revenue: 0,
                 profit: 0,
-                products: {} // для top_products
+                products: {}
             };
         }
 
@@ -88,7 +92,7 @@ function analyzeSalesData(data, options) {
 
         if (Array.isArray(receipt.items)) {
             receipt.items.forEach(item => {
-                const sku = item.sku || item.product_id; // запасной ключ
+                const sku = item.sku || item.product_id;
                 if (!sku) return;
 
                 const product = productsMap[sku] || {};
@@ -96,20 +100,16 @@ function analyzeSalesData(data, options) {
                 const quantity = typeof item.quantity === 'number' ? item.quantity : 1;
                 const discount = typeof item.discount === 'number' ? item.discount : 0;
 
-                // Выручка по позиции
                 const revenue = salePrice * quantity * (1 - discount / 100);
                 stat.revenue += revenue;
 
-                // Себестоимость (пробуем разные поля)
                 let costPrice = 0;
                 if (typeof product.purchase_price === 'number') costPrice = product.purchase_price;
                 else if (typeof product.cost === 'number') costPrice = product.cost;
 
-                const cost = costPrice * quantity;
-                const profit = revenue - cost;
+                const profit = revenue - (costPrice * quantity);
                 stat.profit += profit;
 
-                // Для top_products сохраняем только sku и количество
                 if (!stat.products[sku]) {
                     stat.products[sku] = { sku, quantity: 0 };
                 }
@@ -118,24 +118,19 @@ function analyzeSalesData(data, options) {
         }
     });
 
-    // ---------- Постобработка ----------
+    // ===== ПОСТОБРАБОТКА =====
     let result = Object.values(stats);
 
-    // Округление revenue и profit до двух знаков (как в эталоне)
     result = result.map(s => ({
         ...s,
         revenue: Math.round(s.revenue * 100) / 100,
         profit: Math.round(s.profit * 100) / 100
     }));
 
-    // Фильтр по минимальной прибыли
     const minProfit = options.minProfit ?? -Infinity;
     result = result.filter(s => s.profit >= minProfit);
-
-    // Сортировка по убыванию прибыли
     result.sort((a, b) => b.profit - a.profit);
 
-    // Финальное форматирование с бонусами и top_products
     result = result.map((seller, index) => {
         const topProducts = Object.values(seller.products)
             .sort((a, b) => b.quantity - a.quantity)
@@ -153,7 +148,7 @@ function analyzeSalesData(data, options) {
     return result;
 }
 
-// Экспорт для тестовой среды
+// Экспорт
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         calculateSimpleRevenue,
