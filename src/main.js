@@ -1,20 +1,27 @@
 /**
- * Функция для расчета выручки
- * @param {Object} record запись о покупке из purchase_records
- * @param {Object} product карточка товара из products
- * @returns {number}
+ * Функция для расчета выручки - ИСПРАВЛЕНО
  */
-function calculateSimpleRevenue(record, product) {
-    // amount в записи - это, видимо, сумма продажи
-    return record.amount || 0;
+function calculateSimpleRevenue(purchase, _product) {
+    if (!purchase || typeof purchase !== 'object') return 0;
+    
+    // В данных поле называется "amount" (как в твоем примере)
+    if (typeof purchase.amount === 'number') {
+        return purchase.amount;
+    }
+    
+    // Если amount нет, пробуем другие варианты
+    if (typeof purchase.price === 'number') {
+        const quantity = typeof purchase.quantity === 'number' ? purchase.quantity : 1;
+        return purchase.price * quantity;
+    }
+    
+    // Если ничего нет, возвращаем 0
+    console.warn('Cannot calculate revenue for:', purchase);
+    return 0;
 }
 
 /**
  * Функция для расчета бонусов
- * @param {number} index порядковый номер в рейтинге
- * @param {number} total общее число продавцов
- * @param {Object} seller карточка продавца
- * @returns {number}
  */
 function calculateBonusByProfit(index, total, seller) {
     if (index === 0) return 1000;
@@ -24,159 +31,143 @@ function calculateBonusByProfit(index, total, seller) {
 }
 
 /**
- * Функция для анализа данных продаж - РАБОЧАЯ ВЕРСИЯ
- * @param {Object} data - объект с customers, products, sellers, purchase_records
- * @param {Object} options - настройки анализа
- * @returns {Array} - массив с аналитикой по продавцам
+ * Главная функция анализа - ИСПРАВЛЕННАЯ ВЕРСИЯ
  */
-function analyzeSalesData(data, options) {
-    // ========== ПРОВЕРКА ВХОДНЫХ ДАННЫХ ==========
-    
-    // Проверяем, что data - объект
+function analyzeSalesData(data, options = {}) {
+    // ========== ВАЛИДАЦИЯ ==========
     if (!data || typeof data !== 'object') {
-        console.warn('analyzeSalesData: data is not an object, returning empty array');
         return [];
     }
     
-    // Безопасно получаем все массивы
-    const customers = Array.isArray(data.customers) ? data.customers : [];
-    const products = Array.isArray(data.products) ? data.products : [];
+    // Извлекаем данные
     const sellers = Array.isArray(data.sellers) ? data.sellers : [];
+    const products = Array.isArray(data.products) ? data.products : [];
     const purchaseRecords = Array.isArray(data.purchase_records) ? data.purchase_records : [];
     
-    // Создаем справочники для быстрого доступа
-    const productsMap = {};
-    products.forEach(product => {
-        if (product && product.id) {
-            productsMap[product.id] = product;
-        }
-    });
+    console.log('Processing records:', purchaseRecords.length); // Для отладки
     
+    // Создаем справочники
     const sellersMap = {};
-    sellers.forEach(seller => {
-        if (seller && seller.id) {
-            sellersMap[seller.id] = seller;
-        }
-    });
+    sellers.forEach(s => { if (s?.id) sellersMap[s.id] = s; });
+    
+    const productsMap = {};
+    products.forEach(p => { if (p?.id) productsMap[p.id] = p; });
     
     // ========== СБОР СТАТИСТИКИ ==========
+    const stats = {};
     
-    const sellerStats = {};
-    
-    // Анализируем каждую запись о продаже
     purchaseRecords.forEach(record => {
-        // Пропускаем некорректные записи
-        if (!record || !record.seller_id) return;
+        if (!record?.seller_id) return;
         
         const sellerId = record.seller_id;
         const productId = record.product_id;
         
-        // Получаем данные о продавце и товаре
-        const seller = sellersMap[sellerId] || { name: `Продавец ${sellerId}` };
-        const product = productsMap[productId] || { name: `Товар ${productId}` };
-        
-        // Инициализируем статистику продавца
-        if (!sellerStats[sellerId]) {
-            sellerStats[sellerId] = {
+        // Инициализация статистики продавца
+        if (!stats[sellerId]) {
+            const seller = sellersMap[sellerId] || {};
+            stats[sellerId] = {
                 seller_id: sellerId,
                 name: seller.name || `Продавец ${sellerId}`,
                 sales_count: 0,
                 revenue: 0,
                 profit: 0,
-                products: {} // для сбора статистики по товарам
+                _products: {}
             };
         }
         
-        const stat = sellerStats[sellerId];
+        const stat = stats[sellerId];
         
-        // Получаем сумму из записи (amount)
+        // ВАЖНО: Правильно получаем сумму из amount
         const amount = typeof record.amount === 'number' ? record.amount : 0;
         
-        // Считаем выручку (для простоты берем amount)
+        // Количество (если есть)
+        const quantity = typeof record.quantity === 'number' ? record.quantity : 1;
+        
+        // Выручка = amount (это уже общая сумма)
         const revenue = amount;
         
-        // Для прибыли нам нужна себестоимость, но её нет в данных
-        // Пока используем revenue как profit, но в реальности тут нужна формула
+        // Прибыль (пока равна выручке, если нет себестоимости)
         const profit = revenue; // Временно так
         
         // Обновляем статистику
-        stat.sales_count++;
+        stat.sales_count += quantity;
         stat.revenue += revenue;
         stat.profit += profit;
         
         // Статистика по товарам
-        if (!stat.products[productId]) {
-            stat.products[productId] = {
-                id: productId,
-                name: product.name || `Товар ${productId}`,
-                quantity: 0,
-                revenue: 0
-            };
+        if (productId) {
+            if (!stat._products[productId]) {
+                const product = productsMap[productId] || {};
+                stat._products[productId] = {
+                    id: productId,
+                    name: product.name || `Товар ${productId}`,
+                    quantity: 0,
+                    revenue: 0
+                };
+            }
+            stat._products[productId].quantity += quantity;
+            stat._products[productId].revenue += revenue;
         }
-        
-        stat.products[productId].quantity++;
-        stat.products[productId].revenue += revenue;
     });
     
     // ========== ФОРМИРОВАНИЕ РЕЗУЛЬТАТА ==========
+    let result = Object.values(stats);
     
-    // Преобразуем в массив
-    let resultArray = Object.values(sellerStats);
+    // Фильтрация по минимальной прибыли
+    const minProfit = options.minProfit ?? -Infinity;
+    result = result.filter(s => s.profit >= minProfit);
     
-    // Применяем опции (если есть)
-    const { minProfit = -Infinity } = options || {};
+    // Сортировка по прибыли (от большей к меньшей)
+    result.sort((a, b) => b.profit - a.profit);
     
-    // Фильтруем по минимальной прибыли
-    resultArray = resultArray.filter(seller => seller.profit >= minProfit);
-    
-    // Сортируем по прибыли
-    resultArray.sort((a, b) => b.profit - a.profit);
-    
-    // Назначаем бонусы и формируем top_products
-    resultArray = resultArray.map((seller, index) => {
-        // Добавляем бонус
-        seller.bonus = calculateBonusByProfit(index, resultArray.length, seller);
-        
-        // Формируем топ-3 товара
-        const topProducts = Object.values(seller.products)
+    // Финальное форматирование
+    result = result.map((seller, index) => {
+        // Топ-3 товара по выручке
+        const topProducts = Object.values(seller._products)
             .sort((a, b) => b.revenue - a.revenue)
             .slice(0, 3)
-            .map(p => ({ id: p.id, name: p.name }));
+            .map(p => ({
+                id: p.id,
+                name: p.name
+            }));
         
-        // Убираем промежуточное поле products
-        const { products, ...sellerWithoutProducts } = seller;
+        // Удаляем внутреннее поле _products
+        const { _products, ...cleanSeller } = seller;
         
         return {
-            ...sellerWithoutProducts,
+            ...cleanSeller,
+            bonus: calculateBonusByProfit(index, result.length, seller),
             top_products: topProducts
         };
     });
     
-    return resultArray;
+    return result;
 }
 
 // ========== ТЕСТ С РЕАЛЬНЫМИ ДАННЫМИ ==========
-
-// Создаем тестовые данные как на картинке
 const testData = {
-    customers: [
-        { id: "c1", name: "Иван Петров", email: "ivan@mail.com", phone: "+7...", address: "Москва" }
-    ],
-    products: [
-        { id: "p1", name: "Смартфон", price: 1000, quantity: 10, category: "Электроника" },
-        { id: "p2", name: "Наушники", price: 500, quantity: 20, category: "Аксессуары" }
-    ],
+    customers: Array(10).fill({ id: "c1", name: "Customer" }),
+    products: Array(100).fill({ id: "p1", name: "Product" }),
     sellers: [
-        { id: "s1", name: "Анна Смирнова", email: "anna@mail.com", phone: "+7...", address: "Москва" },
-        { id: "s2", name: "Петр Иванов", email: "petr@mail.com", phone: "+7...", address: "СПб" }
+        { id: "seller_1", name: "Продавец 1" },
+        { id: "seller_2", name: "Продавец 2" },
+        { id: "seller_3", name: "Продавец 3" },
+        { id: "seller_4", name: "Продавец 4" },
+        { id: "seller_5", name: "Продавец 5" }
     ],
     purchase_records: [
-        { id: "r1", product_id: "p1", seller_id: "s1", date: "2024-01-01", amount: 1000, status: "completed" },
-        { id: "r2", product_id: "p2", seller_id: "s1", date: "2024-01-02", amount: 500, status: "completed" },
-        { id: "r3", product_id: "p1", seller_id: "s2", date: "2024-01-03", amount: 1000, status: "completed" }
+        // Здесь должны быть реальные записи с amount
+        { id: "r1", product_id: "p1", seller_id: "seller_1", amount: 1000, quantity: 1 },
+        { id: "r2", product_id: "p2", seller_id: "seller_1", amount: 500, quantity: 1 },
+        // ... и так далее
     ]
 };
 
-// Запускаем анализ
-const result = analyzeSalesData(testData, { minProfit: 0 });
-console.log('Результат анализа:', JSON.stringify(result, null, 2));
+// Экспорт для тестов
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        calculateSimpleRevenue,
+        calculateBonusByProfit,
+        analyzeSalesData
+    };
+}
