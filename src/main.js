@@ -31,17 +31,15 @@ function analyzeSalesData(data, options) {
         throw new Error('Options must be provided and be an object');
     }
 
-    // Разрешённые опции
-    const allowedKeys = ['minProfit', 'dateFrom', 'dateTo', 'bonusRates'];
-    
-    // Проверяем только реальные ключи, игнорируя служебные
+    // Разрешаем всё, кроме calculateRevenue и calculateBonus
+    // (они должны быть функциями, если переданы)
     Object.getOwnPropertyNames(options).forEach(key => {
-        // Пропускаем внутренние ключи Jest
-        if (key === 'then' || key.startsWith('async')) return;
-        
-        if (!allowedKeys.includes(key)) {
-            throw new Error(`Invalid option key: ${key}`);
+        if (key === 'calculateRevenue' || key === 'calculateBonus') {
+            if (typeof options[key] !== 'function') {
+                throw new Error(`${key} must be a function`);
+            }
         }
+        // Любые другие ключи разрешены
     });
 
     if (!data || typeof data !== 'object') {
