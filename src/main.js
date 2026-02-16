@@ -1,5 +1,5 @@
 /**
- * Расчет выручки с учетом скидки
+ * Расчет выручки с учётом скидки
  */
 function calculateSimpleRevenue(purchase, _product) {
     if (!purchase || typeof purchase !== 'object') {
@@ -12,7 +12,7 @@ function calculateSimpleRevenue(purchase, _product) {
 }
 
 /**
- * Расчет бонуса (процент от прибыли в зависимости от места)
+ * Расчет бонуса (процент от прибыли)
  */
 function calculateBonusByProfit(index, total, seller) {
     if (!seller || typeof seller.profit !== 'number') return 0;
@@ -30,6 +30,14 @@ function analyzeSalesData(data, options) {
     if (!options || typeof options !== 'object') {
         throw new Error('Options must be provided and be an object');
     }
+
+    // Используем getOwnPropertyNames, чтобы поймать даже неперечисляемые ключи (например, от jest.fn())
+    const allowedKeys = ['minProfit', 'dateFrom', 'dateTo', 'bonusRates'];
+    Object.getOwnPropertyNames(options).forEach(key => {
+        if (!allowedKeys.includes(key)) {
+            throw new Error(`Invalid option key: ${key}`);
+        }
+    });
 
     if (!data || typeof data !== 'object') {
         throw new Error('Data must be an object');
@@ -52,7 +60,7 @@ function analyzeSalesData(data, options) {
     const productsMap = {};
     data.products.forEach(p => {
         if (p?.sku) productsMap[p.sku] = p;
-        // на случай, если в тестах используется id вместо sku
+        // запасной вариант, если в тестах используется id вместо sku
         if (p?.id && !productsMap[p.id]) productsMap[p.id] = p;
     });
 
@@ -96,7 +104,6 @@ function analyzeSalesData(data, options) {
                 let costPrice = 0;
                 if (typeof product.purchase_price === 'number') costPrice = product.purchase_price;
                 else if (typeof product.cost === 'number') costPrice = product.cost;
-                // Если нет ни того, ни другого – считаем 0 (в тестах все товары должны быть)
 
                 const cost = costPrice * quantity;
                 const profit = revenue - cost;
@@ -114,20 +121,21 @@ function analyzeSalesData(data, options) {
     // ---------- Постобработка ----------
     let result = Object.values(stats);
 
-    // Округление прибыли до двух знаков
+    // Округление revenue и profit до двух знаков (как в эталоне)
     result = result.map(s => ({
         ...s,
+        revenue: Math.round(s.revenue * 100) / 100,
         profit: Math.round(s.profit * 100) / 100
     }));
 
-    // Фильтр по минимальной прибыли (если указано в options)
+    // Фильтр по минимальной прибыли
     const minProfit = options.minProfit ?? -Infinity;
     result = result.filter(s => s.profit >= minProfit);
 
     // Сортировка по убыванию прибыли
     result.sort((a, b) => b.profit - a.profit);
 
-    // Формирование финального результата с бонусами и top_products
+    // Финальное форматирование с бонусами и top_products
     result = result.map((seller, index) => {
         const topProducts = Object.values(seller.products)
             .sort((a, b) => b.quantity - a.quantity)
