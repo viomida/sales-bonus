@@ -1,27 +1,33 @@
 /**
- * Функция для расчета выручки - ИСПРАВЛЕНО
+ * Функция для расчета выручки
+ * @param {Object} purchase - запись о покупке (receipt)
+ * @param {Object} _product - карточка товара (не используется)
+ * @returns {number}
  */
 function calculateSimpleRevenue(purchase, _product) {
     if (!purchase || typeof purchase !== 'object') return 0;
     
-    // В данных поле называется "amount" (как в твоем примере)
-    if (typeof purchase.amount === 'number') {
-        return purchase.amount;
+    // В данных уже есть total_amount - это и есть выручка по чеку
+    if (typeof purchase.total_amount === 'number') {
+        return purchase.total_amount;
     }
     
-    // Если amount нет, пробуем другие варианты
-    if (typeof purchase.price === 'number') {
-        const quantity = typeof purchase.quantity === 'number' ? purchase.quantity : 1;
-        return purchase.price * quantity;
+    // Если нет total_amount, суммируем товары
+    if (Array.isArray(purchase.items)) {
+        return purchase.items.reduce((sum, item) => {
+            return sum + (item.sale_price * item.quantity);
+        }, 0);
     }
     
-    // Если ничего нет, возвращаем 0
-    console.warn('Cannot calculate revenue for:', purchase);
     return 0;
 }
 
 /**
  * Функция для расчета бонусов
+ * @param {number} index - место в рейтинге (0 - первое)
+ * @param {number} total - всего продавцов
+ * @param {Object} seller - данные продавца
+ * @returns {number}
  */
 function calculateBonusByProfit(index, total, seller) {
     if (index === 0) return 1000;
@@ -31,11 +37,15 @@ function calculateBonusByProfit(index, total, seller) {
 }
 
 /**
- * Главная функция анализа - ИСПРАВЛЕННАЯ ВЕРСИЯ
+ * Главная функция анализа данных
+ * @param {Object} data - объект с customers, products, sellers, purchase_records
+ * @param {Object} options - настройки (minProfit и т.д.)
+ * @returns {Array} - массив с аналитикой по продавцам
  */
 function analyzeSalesData(data, options = {}) {
-    // ========== ВАЛИДАЦИЯ ==========
+    // ========== ЗАЩИТА ОТ ОШИБОК ==========
     if (!data || typeof data !== 'object') {
+        console.warn('analyzeSalesData: data is not an object');
         return [];
     }
     
@@ -44,69 +54,83 @@ function analyzeSalesData(data, options = {}) {
     const products = Array.isArray(data.products) ? data.products : [];
     const purchaseRecords = Array.isArray(data.purchase_records) ? data.purchase_records : [];
     
-    console.log('Processing records:', purchaseRecords.length); // Для отладки
+    console.log(`Processing ${purchaseRecords.length} receipts...`);
     
-    // Создаем справочники
+    // Создаем справочники для быстрого доступа
     const sellersMap = {};
-    sellers.forEach(s => { if (s?.id) sellersMap[s.id] = s; });
+    sellers.forEach(seller => {
+        if (seller?.id) {
+            sellersMap[seller.id] = seller;
+        }
+    });
     
     const productsMap = {};
-    products.forEach(p => { if (p?.id) productsMap[p.id] = p; });
+    products.forEach(product => {
+        if (product?.sku) {  // В данных товары используют SKU
+            productsMap[product.sku] = product;
+        }
+    });
     
     // ========== СБОР СТАТИСТИКИ ==========
     const stats = {};
     
-    purchaseRecords.forEach(record => {
-        if (!record?.seller_id) return;
+    purchaseRecords.forEach(receipt => {
+        // Пропускаем чеки без продавца
+        if (!receipt?.seller_id) return;
         
-        const sellerId = record.seller_id;
-        const productId = record.product_id;
+        const sellerId = receipt.seller_id;
         
-        // Инициализация статистики продавца
+        // Инициализируем запись для продавца
         if (!stats[sellerId]) {
             const seller = sellersMap[sellerId] || {};
             stats[sellerId] = {
                 seller_id: sellerId,
-                name: seller.name || `Продавец ${sellerId}`,
+                name: `${seller.first_name || ''} ${seller.last_name || ''}`.trim() || `Продавец ${sellerId}`,
                 sales_count: 0,
                 revenue: 0,
                 profit: 0,
+                // Для сбора статистики по товарам
                 _products: {}
             };
         }
         
         const stat = stats[sellerId];
+        stat.sales_count++;
         
-        // ВАЖНО: Правильно получаем сумму из amount
-        const amount = typeof record.amount === 'number' ? record.amount : 0;
+        // Используем total_amount из чека (это уже готовая сумма)
+        const receiptTotal = typeof receipt.total_amount === 'number' ? receipt.total_amount : 0;
         
-        // Количество (если есть)
-        const quantity = typeof record.quantity === 'number' ? record.quantity : 1;
+        // Добавляем к общей выручке продавца
+        stat.revenue += receiptTotal;
         
-        // Выручка = amount (это уже общая сумма)
-        const revenue = amount;
+        // ПОКА прибыль = выручке (в данных нет себестоимости)
+        stat.profit += receiptTotal;
         
-        // Прибыль (пока равна выручке, если нет себестоимости)
-        const profit = revenue; // Временно так
-        
-        // Обновляем статистику
-        stat.sales_count += quantity;
-        stat.revenue += revenue;
-        stat.profit += profit;
-        
-        // Статистика по товарам
-        if (productId) {
-            if (!stat._products[productId]) {
-                const product = productsMap[productId] || {};
-                stat._products[productId] = {
-                    id: productId,
-                    name: product.name || `Товар ${productId}`,
-                    quantity: 0,
-                    revenue: 0
-                };
-            }
-            stat._products[productId].quantity += quantity;
-            stat._products[productId].revenue += revenue;
+        // ========== СБОР СТАТИСТИКИ ПО ТОВАРАМ ==========
+        if (Array.isArray(receipt.items)) {
+            receipt.items.forEach(item => {
+                const sku = item.sku;
+                if (!sku) return;
+                
+                const quantity = typeof item.quantity === 'number' ? item.quantity : 1;
+                const salePrice = typeof item.sale_price === 'number' ? item.sale_price : 0;
+                const itemTotal = salePrice * quantity;
+                
+                // Инициализируем товар, если его еще нет
+                if (!stat._products[sku]) {
+                    const product = productsMap[sku] || {};
+                    stat._products[sku] = {
+                        id: sku,
+                        name: product.name || `Товар ${sku}`,
+                        quantity: 0,
+                        revenue: 0
+                    };
+                }
+                
+                // Добавляем данные по товару
+                stat._products[sku].quantity += quantity;
+                stat._products[sku].revenue += itemTotal;
+            });
         }
     });
     
@@ -124,6 +148,7 @@ function analyzeSalesData(data, options = {}) {
     result = result.map((seller, index) => {
         // Топ-3 товара по выручке
         const topProducts = Object.values(seller._products)
+            .filter(p => p.revenue > 0)
             .sort((a, b) => b.revenue - a.revenue)
             .slice(0, 3)
             .map(p => ({
@@ -144,26 +169,7 @@ function analyzeSalesData(data, options = {}) {
     return result;
 }
 
-// ========== ТЕСТ С РЕАЛЬНЫМИ ДАННЫМИ ==========
-const testData = {
-    customers: Array(10).fill({ id: "c1", name: "Customer" }),
-    products: Array(100).fill({ id: "p1", name: "Product" }),
-    sellers: [
-        { id: "seller_1", name: "Продавец 1" },
-        { id: "seller_2", name: "Продавец 2" },
-        { id: "seller_3", name: "Продавец 3" },
-        { id: "seller_4", name: "Продавец 4" },
-        { id: "seller_5", name: "Продавец 5" }
-    ],
-    purchase_records: [
-        // Здесь должны быть реальные записи с amount
-        { id: "r1", product_id: "p1", seller_id: "seller_1", amount: 1000, quantity: 1 },
-        { id: "r2", product_id: "p2", seller_id: "seller_1", amount: 500, quantity: 1 },
-        // ... и так далее
-    ]
-};
-
-// Экспорт для тестов
+// ========== ЭКСПОРТ ДЛЯ ТЕСТОВ ==========
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         calculateSimpleRevenue,
